@@ -1,18 +1,21 @@
 """
-Token-based text chunking with page number tracking.
+Character-based text chunking with page number tracking.
 Each chunk carries the page_number of its source page.
+
+Uses simple character-count chunking with word-boundary awareness
+instead of transformer tokenization — no heavy ML dependencies required.
 """
-from transformers import AutoTokenizer
 
-_tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
-
-CHUNK_SIZE = 400
-CHUNK_OVERLAP = 80
+# Approximate token-to-char ratio: ~5 chars per token
+# Original CHUNK_SIZE=400 tokens → ~2000 chars
+# Original CHUNK_OVERLAP=80 tokens → ~400 chars
+CHUNK_SIZE_CHARS = 2000
+CHUNK_OVERLAP_CHARS = 400
 
 
 def chunk_documents(pages: list[dict]) -> list[dict]:
     """
-    Split page-level text into token-based chunks.
+    Split page-level text into character-based chunks with word-boundary awareness.
 
     Args:
         pages: List of dicts: { filename, page_number, text }
@@ -28,25 +31,38 @@ def chunk_documents(pages: list[dict]) -> list[dict]:
         page_number = page["page_number"]
         text = page["text"]
 
-        token_ids = _tokenizer.encode(text, add_special_tokens=False)
+        if not text or not text.strip():
+            continue
 
         start = 0
-        while start < len(token_ids):
-            end = min(start + CHUNK_SIZE, len(token_ids))
-            chunk_text = _tokenizer.decode(token_ids[start:end], skip_special_tokens=True)
+        while start < len(text):
+            end = min(start + CHUNK_SIZE_CHARS, len(text))
 
-            all_chunks.append({
-                "chunk_id": chunk_id,
-                "document_name": filename,
-                "page_number": page_number,
-                "text": chunk_text,
-            })
-            chunk_id += 1
+            # Snap to word boundary (don't split mid-word)
+            if end < len(text):
+                # Look for last space within the chunk
+                space_pos = text.rfind(' ', start, end)
+                if space_pos > start:
+                    end = space_pos + 1  # include the space
 
-            if end >= len(token_ids):
+            chunk_text = text[start:end].strip()
+
+            if chunk_text:
+                all_chunks.append({
+                    "chunk_id": chunk_id,
+                    "document_name": filename,
+                    "page_number": page_number,
+                    "text": chunk_text,
+                })
+                chunk_id += 1
+
+            if end >= len(text):
                 break
-            start += CHUNK_SIZE - CHUNK_OVERLAP
+            start = end - CHUNK_OVERLAP_CHARS
+            # Ensure forward progress
+            if start <= (end - CHUNK_SIZE_CHARS):
+                start = end
 
     print(f"  Chunked {len(pages)} pages into {len(all_chunks)} chunks "
-          f"(size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})")
+          f"(size≈{CHUNK_SIZE_CHARS} chars, overlap≈{CHUNK_OVERLAP_CHARS} chars)")
     return all_chunks
