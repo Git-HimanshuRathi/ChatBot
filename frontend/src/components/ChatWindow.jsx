@@ -1,64 +1,29 @@
 import { useRef, useEffect } from "react";
 import ChatMessage from "./ChatMessage";
 
-const SUGGESTIONS = [
-  { text: "What is Clearpath?", icon: "💡" },
-  { text: "What are the pricing plans?", icon: "💰" },
-  { text: "How do I reset my password?", icon: "🔑" },
-  { text: "Explain the GitHub integration", icon: "🔗" },
-];
-
-export default function ChatWindow({
-  messages,
-  isStreaming,
-  onSuggestionClick,
-}) {
+export default function ChatWindow({ messages, isStreaming }) {
   const bottomRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Empty state
   if (messages.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center px-4">
-        <div className="w-12 h-12 rounded-full bg-accent/10 flex items-center justify-center mb-6">
-          <svg
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            fill="none"
-            className="text-accent"
-          >
-            <path
-              d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinejoin="round"
-            />
+      <div className="flex-1 flex flex-col items-center justify-center px-4 text-center">
+        <div className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center mb-4">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-accent">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"
+              stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
           </svg>
         </div>
-        <h1 className="text-2xl font-semibold text-text-primary mb-8">
-          How can I help you today?
-        </h1>
-        <div className="grid grid-cols-2 gap-3 max-w-lg w-full">
-          {SUGGESTIONS.map((s, i) => (
-            <button
-              key={i}
-              onClick={() => onSuggestionClick?.(s.text)}
-              className="
-                text-left p-4 rounded-xl border border-border
-                bg-transparent hover:bg-bg-hover
-                text-sm text-text-secondary
-                transition-colors duration-150 cursor-pointer
-              "
-            >
-              <span className="mr-2">{s.icon}</span>
-              {s.text}
-            </button>
-          ))}
-        </div>
+        <h2 className="text-lg font-semibold text-text-primary mb-2">
+          Ask anything about your document
+        </h2>
+        <p className="text-sm text-text-secondary max-w-xs leading-relaxed">
+          All answers are sourced directly from the uploaded PDF with page citations.
+          Out-of-scope questions will be declined.
+        </p>
       </div>
     );
   }
@@ -72,9 +37,7 @@ export default function ChatWindow({
             message={msg}
             isLast={i === messages.length - 1}
             isStreaming={
-              isStreaming &&
-              i === messages.length - 1 &&
-              msg.role === "assistant"
+              isStreaming && i === messages.length - 1 && msg.role === "assistant"
             }
           />
         ))}

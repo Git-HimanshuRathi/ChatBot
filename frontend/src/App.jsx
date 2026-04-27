@@ -1,6 +1,7 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import MainLayout from "./components/MainLayout";
+import TestCasesPanel from "./components/TestCasesPanel";
 
 const API_URL = "";
 
@@ -13,18 +14,23 @@ function createNewChat() {
     id: generateId(),
     title: "New chat",
     messages: [],
-    model: null,
-    lastDebug: null,
+    pdfLoaded: false,
+    pdfName: null,
+    pageCount: null,
     lastSources: null,
+    lastDebug: null,
   };
 }
 
 export default function App() {
   const [chats, setChats] = useState([createNewChat()]);
-  const [activeChatId, setActiveChatId] = useState(chats[0].id);
+  const [activeChatId, setActiveChatId] = useState(() => chats[0]?.id);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [debugOpen, setDebugOpen] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [testPanelOpen, setTestPanelOpen] = useState(false);
+  const [testLoading, setTestLoading] = useState(false);
   const abortRef = useRef(null);
 
   const activeChat = chats.find((c) => c.id === activeChatId) || chats[0];
@@ -37,6 +43,7 @@ export default function App() {
     const chat = createNewChat();
     setChats((prev) => [chat, ...prev]);
     setActiveChatId(chat.id);
+    setUploadError(null);
   }, []);
 
   const handleDeleteChat = useCallback(
@@ -48,13 +55,56 @@ export default function App() {
           setActiveChatId(fresh.id);
           return [fresh];
         }
-        if (chatId === activeChatId) {
-          setActiveChatId(filtered[0].id);
-        }
+        if (chatId === activeChatId) setActiveChatId(filtered[0].id);
         return filtered;
       });
     },
     [activeChatId],
+  );
+
+  const handleSelectChat = useCallback((chatId) => {
+    setActiveChatId(chatId);
+    setUploadError(null);
+    setSourcesOpen(false);
+  }, []);
+
+  // Upload a PDF for the active chat session
+  const handleUpload = useCallback(
+    async (file) => {
+      const chatId = activeChatId;
+      setIsUploading(true);
+      setUploadError(null);
+
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("session_id", chatId);
+
+        const res = await fetch(`${API_URL}/upload`, {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: "Upload failed." }));
+          throw new Error(err.detail || "Upload failed.");
+        }
+
+        const data = await res.json();
+        updateChat(chatId, (c) => ({
+          ...c,
+          pdfLoaded: true,
+          pdfName: data.pdf_name,
+          pageCount: data.page_count,
+          title: data.pdf_name.replace(".pdf", ""),
+        }));
+      } catch (err) {
+        setUploadError(err.message);
+      } finally {
+        setIsUploading(false);
+      }
+    },
+    [activeChatId, updateChat],
   );
 
   const handleSend = useCallback(
@@ -67,7 +117,6 @@ export default function App() {
 
       updateChat(chatId, (c) => ({
         ...c,
-        title: c.messages.length === 0 ? text.slice(0, 40) : c.title,
         messages: [...c.messages, userMsg, assistantMsg],
       }));
 
@@ -76,7 +125,6 @@ export default function App() {
       abortRef.current = controller;
 
       try {
-        // Try SSE streaming endpoint
         const res = await fetch(`${API_URL}/chat/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -90,6 +138,7 @@ export default function App() {
         const decoder = new TextDecoder();
         let buffer = "";
         let fullText = "";
+        let eventType = "";
 
         while (true) {
           const { done, value } = await reader.read();
@@ -99,7 +148,6 @@ export default function App() {
           const lines = buffer.split("\n");
           buffer = lines.pop() || "";
 
-          let eventType = "";
           for (const line of lines) {
             if (line.startsWith("event: ")) {
               eventType = line.slice(7).trim();
@@ -111,26 +159,21 @@ export default function App() {
                   updateChat(chatId, (c) => ({
                     ...c,
                     messages: c.messages.map((m) =>
-                      m.id === assistantMsg.id
-                        ? { ...m, content: fullText }
-                        : m,
+                      m.id === assistantMsg.id ? { ...m, content: fullText } : m,
                     ),
                   }));
                 } else if (eventType === "metadata") {
-                  const model = parsed.debug?.model_used || null;
                   updateChat(chatId, (c) => ({
                     ...c,
-                    model,
-                    lastDebug: parsed.debug,
                     lastSources: parsed.sources,
+                    lastDebug: parsed.debug,
                     messages: c.messages.map((m) =>
                       m.id === assistantMsg.id
                         ? { ...m, sources: parsed.sources, debug: parsed.debug }
                         : m,
                     ),
                   }));
-                  // Auto-open debug panel on first response
-                  setDebugOpen(true);
+                  setSourcesOpen(true);
                 }
               } catch {
                 /* skip unparseable lines */
@@ -151,21 +194,15 @@ export default function App() {
           const data = await res.json();
           updateChat(chatId, (c) => ({
             ...c,
-            model: data.debug?.model_used || null,
-            lastDebug: data.debug,
             lastSources: data.sources,
+            lastDebug: data.debug,
             messages: c.messages.map((m) =>
               m.id === assistantMsg.id
-                ? {
-                    ...m,
-                    content: data.response,
-                    sources: data.sources,
-                    debug: data.debug,
-                  }
+                ? { ...m, content: data.response, sources: data.sources, debug: data.debug }
                 : m,
             ),
           }));
-          setDebugOpen(true);
+          setSourcesOpen(true);
         } catch (fallbackErr) {
           updateChat(chatId, (c) => ({
             ...c,
@@ -173,7 +210,7 @@ export default function App() {
               m.id === assistantMsg.id
                 ? {
                     ...m,
-                    content: `⚠️ Could not connect to backend at ${API_URL}.\n\nIs the server running? Start it with:\n\`uvicorn main:app --port 8000 --reload\`\n\n${fallbackErr.message}`,
+                    content: `Could not connect to backend.\n\nStart it with:\n\`uvicorn main:app --port 8000 --reload\`\n\n${fallbackErr.message}`,
                   }
                 : m,
             ),
@@ -187,25 +224,60 @@ export default function App() {
     [activeChatId, isStreaming, updateChat],
   );
 
+  // Load sample PDF into the current chat (if not already loaded), then open test panel
+  const handleOpenTests = useCallback(async () => {
+    if (!activeChat.pdfLoaded) {
+      setTestLoading(true);
+      try {
+        const formData = new FormData();
+        formData.append("session_id", activeChatId);
+        const res = await fetch(`${API_URL}/load-sample`, { method: "POST", body: formData });
+        if (!res.ok) throw new Error("Could not load sample PDF.");
+        const data = await res.json();
+        updateChat(activeChatId, (c) => ({
+          ...c,
+          pdfLoaded: true,
+          pdfName: data.pdf_name,
+          pageCount: data.page_count,
+        }));
+      } catch (err) {
+        setUploadError(err.message);
+        setTestLoading(false);
+        return;
+      }
+      setTestLoading(false);
+    }
+    setTestPanelOpen(true);
+  }, [activeChat.pdfLoaded, activeChatId, updateChat]);
+
   return (
     <div className="flex h-full">
+      <TestCasesPanel
+        isOpen={testPanelOpen}
+        onClose={() => setTestPanelOpen(false)}
+        onRunQuery={handleSend}
+        pdfLoaded={activeChat.pdfLoaded}
+      />
       <Sidebar
         chats={chats}
         activeChatId={activeChatId}
-        isOpen={sidebarOpen}
-        onSelectChat={setActiveChatId}
+        isOpen={true}
+        onSelectChat={handleSelectChat}
         onNewChat={handleNewChat}
         onDeleteChat={handleDeleteChat}
-        onToggle={() => setSidebarOpen((o) => !o)}
+        onToggle={() => {}}
       />
       <MainLayout
         chat={activeChat}
         isStreaming={isStreaming}
-        sidebarOpen={sidebarOpen}
-        debugOpen={debugOpen}
+        isUploading={isUploading}
+        uploadError={uploadError}
+        sourcesOpen={sourcesOpen}
         onSend={handleSend}
-        onToggleSidebar={() => setSidebarOpen((o) => !o)}
-        onToggleDebug={() => setDebugOpen((o) => !o)}
+        onUpload={handleUpload}
+        onToggleSources={() => setSourcesOpen((o) => !o)}
+        onOpenTests={handleOpenTests}
+        testLoading={testLoading}
       />
     </div>
   );

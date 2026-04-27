@@ -52,7 +52,7 @@ export default function ChatInput({ onSend, disabled }) {
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Message Clearpath AI..."
+            placeholder="Ask a question about your document..."
             disabled={disabled}
             rows={1}
             className="
@@ -82,8 +82,7 @@ export default function ChatInput({ onSend, disabled }) {
           </button>
         </div>
         <p className="text-center text-[11px] text-text-muted mt-2">
-          Clearpath AI can make mistakes. Responses are grounded in Clearpath
-          documentation.
+          Responses are grounded strictly in your uploaded PDF. Out-of-scope questions will be declined.
         </p>
       </div>
     </div>

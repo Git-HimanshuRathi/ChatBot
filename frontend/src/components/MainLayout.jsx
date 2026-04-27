@@ -1,41 +1,59 @@
 import Header from "./Header";
 import ChatWindow from "./ChatWindow";
 import ChatInput from "./ChatInput";
-import DebugPanel from "./DebugPanel";
+import PDFUpload from "./PDFUpload";
+import SourcesPanel from "./SourcesPanel";
 
 export default function MainLayout({
   chat,
   isStreaming,
-  sidebarOpen,
-  debugOpen,
+  isUploading,
+  uploadError,
+  sourcesOpen,
   onSend,
-  onToggleSidebar,
-  onToggleDebug,
+  onUpload,
+  onToggleSources,
+  onOpenTests,
+  testLoading,
 }) {
   return (
     <div className="flex-1 flex h-full min-w-0">
       {/* Chat area */}
       <main className="flex-1 flex flex-col h-full min-w-0 bg-bg-main relative">
         <Header
-          model={chat.model}
-          sidebarOpen={sidebarOpen}
-          debugOpen={debugOpen}
-          onToggleSidebar={onToggleSidebar}
-          onToggleDebug={onToggleDebug}
+          pdfName={chat.pdfName}
+          pageCount={chat.pageCount}
+          sourcesOpen={sourcesOpen}
+          onToggleSources={onToggleSources}
+          showSourcesButton={chat.pdfLoaded && chat.messages.length > 0}
+          onOpenTests={onOpenTests}
+          testLoading={testLoading}
         />
-        <ChatWindow
-          messages={chat.messages}
-          isStreaming={isStreaming}
-          onSuggestionClick={onSend}
-        />
-        <ChatInput onSend={onSend} disabled={isStreaming} />
+
+        {chat.pdfLoaded ? (
+          <>
+            <ChatWindow
+              messages={chat.messages}
+              isStreaming={isStreaming}
+            />
+            <ChatInput onSend={onSend} disabled={isStreaming} />
+          </>
+        ) : (
+          <PDFUpload
+            onUpload={onUpload}
+            isUploading={isUploading}
+            uploadError={uploadError}
+          />
+        )}
       </main>
 
-      {/* Debug panel */}
-      <DebugPanel
-        data={{ debug: chat.lastDebug, sources: chat.lastSources }}
-        isOpen={debugOpen}
-        onToggle={onToggleDebug}
+      {/* Sources panel */}
+      <SourcesPanel
+        data={{ sources: chat.lastSources, debug: chat.lastDebug }}
+        isOpen={sourcesOpen}
+        onToggle={onToggleSources}
+        pdfName={chat.pdfName}
+        pageCount={chat.pageCount}
       />
     </div>
   );
