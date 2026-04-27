@@ -45,6 +45,42 @@ def _cache_embedding(query: str, embedding: np.ndarray):
         _query_cache.popitem(last=False)
 
 
+def retrieve_fallback(query: str, index: faiss.Index, chunks: list[dict], top_k: int = 3) -> list[dict]:
+    """
+    Return top-K chunks regardless of similarity threshold.
+    Used as fallback when primary retrieval returns 0 results, so the LLM can
+    describe what the document covers rather than giving a bare refusal.
+    """
+    cached = _get_cached_embedding(query)
+    if cached is not None:
+        query_embedding = cached
+    else:
+        query_embedding = embed_query(query)
+        _cache_embedding(query, query_embedding)
+
+    k = min(top_k, len(chunks))
+    if k == 0:
+        return []
+
+    scores, indices = index.search(query_embedding, k)
+    results = []
+    for score, idx in zip(scores[0], indices[0]):
+        if idx == -1:
+            continue
+        chunk = chunks[idx]
+        results.append({
+            "chunk_id": chunk["chunk_id"],
+            "document_name": chunk["document_name"],
+            "page_number": chunk.get("page_number"),
+            "text": chunk["text"],
+            "similarity_score": round(float(score), 4),
+            "is_fallback": True,
+        })
+
+    print(f"  Fallback retrieval: {len(results)} chunks (no threshold)")
+    return results
+
+
 def retrieve(query: str, index: faiss.Index, chunks: list[dict]) -> list[dict]:
     """
     Embed query and retrieve top-K relevant chunks from the FAISS index.
@@ -87,6 +123,7 @@ def retrieve(query: str, index: faiss.Index, chunks: list[dict]) -> list[dict]:
         results.append({
             "chunk_id": chunk["chunk_id"],
             "document_name": chunk["document_name"],
+            "page_number": chunk.get("page_number"),
             "text": chunk["text"],
             "similarity_score": round(float(score), 4)
         })
