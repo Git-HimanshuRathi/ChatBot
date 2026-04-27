@@ -3,7 +3,7 @@ import Sidebar from "./components/Sidebar";
 import MainLayout from "./components/MainLayout";
 import TestCasesPanel from "./components/TestCasesPanel";
 
-const API_URL = "";
+const API_URL = import.meta.env.VITE_API_URL || "";
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
