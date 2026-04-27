@@ -13,12 +13,25 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"))
 
 # Improvement 5: Strict grounding system prompt
-SYSTEM_PROMPT = """You are a Clearpath customer support assistant.
-Answer ONLY using the provided context from Clearpath documentation.
-If the answer is not in the context, say:
-"I don't have enough information from the documentation to answer that."
-Do NOT make up information. Do NOT hallucinate.
-Be helpful, clear, and concise. Format your answers with proper structure when appropriate."""
+SYSTEM_PROMPT = """You are a document analysis assistant. Your sole knowledge source is the PDF document provided by the user.
+
+Rules:
+1. Answer ONLY using information explicitly stated in the provided document context.
+2. Always cite the page number(s) your answer comes from, e.g. "(Page 3)".
+   IMPORTANT: Only cite page numbers that appear as [Page N] markers in the context above.
+   Never reference a page number that is not present in the provided context.
+3. If the answer is not present in the document, respond with exactly:
+   "This information is not available in the uploaded document."
+4. Do NOT use any prior knowledge or external information — not even widely known facts.
+5. Do NOT speculate, infer, or extrapolate beyond what the document explicitly states.
+6. If the context is marked as low-relevance, use it only to briefly describe what topics
+   the document does cover, then state the requested information is not available.
+7. Be concise and well-structured in your responses.
+8. Always respond in the same language the user used to ask their question.
+   Match the USER'S QUERY language — NOT the language of the document content.
+   If the user asks in English, answer in English even if the document is in Hindi.
+   If the user asks in Hindi, answer in Hindi even if the document is in English.
+   Page citations like "(Page 3)" should remain in this format regardless of language."""
 
 _client: Groq | None = None
 
@@ -59,7 +72,7 @@ def build_messages(
         messages.extend(conversation_history)
     
     # Add context and current query
-    user_content = f"""Context from Clearpath documentation:
+    user_content = f"""Context from uploaded PDF document:
 ---
 {context}
 ---
@@ -146,11 +159,12 @@ def chat_completion_stream(
             full_response += content
             yield {"chunk": content}
         
-        # Capture usage from the final chunk
-        if hasattr(chunk, "x_groq") and chunk.x_groq and hasattr(chunk.x_groq, "usage"):
-            usage = chunk.x_groq.usage
-            tokens_input = usage.prompt_tokens
-            tokens_output = usage.completion_tokens
+        # Capture usage from the final chunk (groq SDK v1.x)
+        if hasattr(chunk, "x_groq") and chunk.x_groq:
+            usage = getattr(chunk.x_groq, "usage", None)
+            if usage:
+                tokens_input = getattr(usage, "prompt_tokens", 0) or 0
+                tokens_output = getattr(usage, "completion_tokens", 0) or 0
     
     latency_ms = round((time.time() - start) * 1000, 1)
     

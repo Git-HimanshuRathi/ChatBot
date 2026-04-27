@@ -1,27 +1,30 @@
 """
-Eval Harness — Test queries with expected behaviors.
-Run: python -m eval_harness (from backend/)
+Eval Harness — PDF Chat Agent
+Tests the full pipeline against the sample PDF: retrieval → routing → LLM → evaluator
 
-Tests the full pipeline: retrieval → routing → LLM → evaluator
-Reports pass/fail for each test case.
+Run: python eval_harness.py [path/to/pdf]
+     python eval_harness.py ../tests/sample.pdf
 """
 import sys
 import os
 import json
 import time
 
-# Add backend to path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from rag.ingest import ingest_pdfs
+from rag.ingest import ingest_pdf
 from rag.chunk import chunk_documents
-from rag.embed import build_index, load_index, get_model
+from rag.embed import build_index, get_model
 from rag.retrieve import retrieve
 from router.router import classify_query
 from evaluator.evaluator import evaluate_response
 from llm.groq_client import chat_completion
 
-# ─── Test Cases ──────────────────────────────────────────────────────────
+# ─── Test Cases ──────────────────────────────────────────────────────────────
+# Using sample.pdf (Employee Handbook 2024)
+# Valid queries expect in-scope answers with page citations.
+# Invalid queries expect the out_of_scope_refused flag.
+
 TEST_CASES = [
     # --- Routing Tests ---
     {
@@ -33,115 +36,88 @@ TEST_CASES = [
     },
     {
         "id": "R2",
-        "query": "Can you explain the differences between pricing plans and recommend the best one for a startup?",
+        "query": "Can you compare the leave policies and explain which employees benefit most?",
         "expect_classification": "complex",
         "expect_model": "llama-3.3-70b-versatile",
-        "description": "Multi-part reasoning question should route to complex model",
-    },
-    {
-        "id": "R3",
-        "query": "What is Clearpath?",
-        "expect_classification": "simple",
-        "expect_model": "llama-3.1-8b-instant",
-        "description": "Short factual question should route to simple model",
-    },
-    {
-        "id": "R4",
-        "query": "My account is not working and I'm getting an error when I try to log in. Can you help me troubleshoot?",
-        "expect_classification": "complex",
-        "expect_model": "llama-3.3-70b-versatile",
-        "description": "Complaint with troubleshooting should route to complex model",
-    },
-    {
-        "id": "R5",
-        "query": "Yes",
-        "expect_classification": "simple",
-        "expect_model": "llama-3.1-8b-instant",
-        "description": "Yes/no response should route to simple model",
+        "description": "Comparison + reasoning should route to complex model",
     },
 
-    # --- Retrieval Tests ---
+    # --- Valid in-scope queries (expect answers with page citations) ---
     {
-        "id": "T1",
-        "query": "What are the keyboard shortcuts?",
-        "expect_sources_contain": "11_Keyboard_Shortcuts",
-        "description": "Should retrieve keyboard shortcuts document",
+        "id": "V1",
+        "query": "What is the purpose of this employee handbook?",
+        "expect_in_scope": True,
+        "expect_answer_contains": [],
+        "description": "Core in-scope query — should answer from document",
     },
     {
-        "id": "T2",
-        "query": "How much does the Pro plan cost?",
-        "expect_sources_contain": "14_Pricing_Sheet",
-        "description": "Should retrieve pricing document",
+        "id": "V2",
+        "query": "What are the attendance or working hours expectations?",
+        "expect_in_scope": True,
+        "description": "Policy query — should retrieve relevant chunks",
     },
     {
-        "id": "T3",
-        "query": "What is the weather today?",
-        "expect_no_relevant_sources": True,
-        "description": "Off-topic query should retrieve no relevant chunks",
-    },
-
-    # --- Evaluator Tests ---
-    {
-        "id": "E1",
-        "query": "Does Clearpath support blockchain?",
-        "expect_flag_contains": "refusal",
-        "description": "Should flag as refusal or hallucination for off-topic feature",
+        "id": "V3",
+        "query": "What is the code of conduct expected from employees?",
+        "expect_in_scope": True,
+        "description": "Conduct policy — should answer from document",
     },
     {
-        "id": "E2",
-        "query": "Tell me about quantum computing integration",
-        "expect_confidence": "low",
-        "description": "Off-topic technology query should get low confidence",
-    },
-    {
-        "id": "E3",
-        "query": "What is the meaning of life?",
-        "expect_confidence": "low",
-        "description": "Completely off-topic should get low confidence",
+        "id": "V4",
+        "query": "What is the process for reporting workplace grievances?",
+        "expect_in_scope": True,
+        "description": "Grievance procedure — should answer from document",
     },
 
-    # --- End-to-End Quality Tests ---
+    # --- Invalid / out-of-scope queries (expect refusal) ---
     {
-        "id": "Q1",
-        "query": "What integrations does Clearpath support?",
-        "expect_sources_contain": "09_Integrations_Catalog",
-        "description": "Should retrieve integrations catalog document",
+        "id": "OOS1",
+        "query": "What is the capital of France?",
+        "expect_flag": "out_of_scope_refused",
+        "description": "Completely off-topic — must refuse",
     },
     {
-        "id": "Q2",
-        "query": "How do I reset my password?",
-        "expect_answer_contains": ["password"],
-        "description": "Should provide password reset info",
+        "id": "OOS2",
+        "query": "Write me a poem about the company.",
+        "expect_flag": "out_of_scope_refused",
+        "description": "Creative task outside document scope — must refuse",
+    },
+    {
+        "id": "OOS3",
+        "query": "What is the current stock price of this company?",
+        "expect_flag": "out_of_scope_refused",
+        "description": "Financial data not in document — must refuse",
     },
 ]
 
 
-def run_eval():
-    """Run all test cases and report results."""
-    # Load index
+def build_context(retrieved: list[dict]) -> str:
+    if not retrieved:
+        return "No relevant content found in the uploaded document."
+    return "\n\n".join(
+        f"[Page {c['page_number']}, Similarity: {c['similarity_score']}]\n{c['text']}"
+        for c in retrieved
+    )
+
+
+def run_eval(pdf_path: str):
     print("=" * 70)
-    print("  CLEARPATH EVAL HARNESS")
+    print("  PDF CHAT AGENT — EVAL HARNESS")
+    print(f"  PDF: {pdf_path}")
     print("=" * 70)
 
-    loaded = load_index()
-    if loaded:
-        faiss_index, chunk_metadata = loaded
-        print(f"  ✓ Loaded index: {faiss_index.ntotal} vectors")
-    else:
-        base_dir = os.path.dirname(os.path.dirname(__file__))
-        docs_dir = os.path.join(base_dir, "docs")
-        documents = ingest_pdfs(docs_dir)
-        chunks = chunk_documents(documents)
-        faiss_index, chunk_metadata = build_index(chunks)
-        print(f"  ✓ Built index: {faiss_index.ntotal} vectors")
-
+    # Build index from sample PDF
+    print("\n  Building index...")
+    pages = ingest_pdf(pdf_path)
+    chunks = chunk_documents(pages)
+    faiss_index, chunk_metadata = build_index(chunks)
     get_model()
-    print()
+    print(f"  Index ready: {faiss_index.ntotal} vectors\n")
 
-    results = []
     passed = 0
     failed = 0
     errors = 0
+    results = []
 
     for tc in TEST_CASES:
         tc_id = tc["id"]
@@ -152,14 +128,9 @@ def run_eval():
         print(f"       Query: \"{query}\"")
 
         try:
-            # Run pipeline
             retrieved = retrieve(query, faiss_index, chunk_metadata)
             routing = classify_query(query)
-
-            context = "\n\n".join(
-                f"[Source: {c['document_name']}]\n{c['text']}"
-                for c in retrieved
-            ) if retrieved else "No relevant documentation found."
+            context = build_context(retrieved)
 
             llm_result = chat_completion(
                 model=routing["model_used"],
@@ -169,85 +140,54 @@ def run_eval():
 
             evaluation = evaluate_response(llm_result["response"], retrieved)
 
-            # Check expectations
             test_passed = True
             fail_reasons = []
 
-            # Classification check
-            if "expect_classification" in tc:
-                if routing["classification"] != tc["expect_classification"]:
+            # Routing checks
+            if "expect_classification" in tc and routing["classification"] != tc["expect_classification"]:
+                test_passed = False
+                fail_reasons.append(
+                    f"Classification: expected '{tc['expect_classification']}', got '{routing['classification']}'"
+                )
+
+            if "expect_model" in tc and routing["model_used"] != tc["expect_model"]:
+                test_passed = False
+                fail_reasons.append(
+                    f"Model: expected '{tc['expect_model']}', got '{routing['model_used']}'"
+                )
+
+            # In-scope: should NOT have out_of_scope_refused
+            if tc.get("expect_in_scope"):
+                if "out_of_scope_refused" in evaluation["flags"]:
+                    test_passed = False
+                    fail_reasons.append("Expected in-scope answer but got out_of_scope_refused")
+                if not retrieved:
+                    test_passed = False
+                    fail_reasons.append("No chunks retrieved — answer has no grounding")
+
+            # Out-of-scope: should have the flag
+            if "expect_flag" in tc:
+                if tc["expect_flag"] not in evaluation["flags"]:
                     test_passed = False
                     fail_reasons.append(
-                        f"Classification: expected '{tc['expect_classification']}', "
-                        f"got '{routing['classification']}'"
+                        f"Expected flag '{tc['expect_flag']}' but got: {evaluation['flags']}"
                     )
 
-            # Model check
-            if "expect_model" in tc:
-                if routing["model_used"] != tc["expect_model"]:
-                    test_passed = False
-                    fail_reasons.append(
-                        f"Model: expected '{tc['expect_model']}', "
-                        f"got '{routing['model_used']}'"
-                    )
-
-            # Source document check
-            if "expect_sources_contain" in tc:
-                source_names = [c["document_name"] for c in retrieved]
-                target = tc["expect_sources_contain"]
-                if not any(target in name for name in source_names):
-                    test_passed = False
-                    fail_reasons.append(
-                        f"Sources: expected '{target}' in {source_names}"
-                    )
-
-            # No relevant sources check
-            if tc.get("expect_no_relevant_sources"):
-                if len(retrieved) > 0:
-                    # Allow if scores are very low
-                    max_score = max(c["similarity_score"] for c in retrieved)
-                    if max_score > 0.4:
-                        test_passed = False
-                        fail_reasons.append(
-                            f"Expected no relevant sources, got {len(retrieved)} "
-                            f"(max_score={max_score})"
-                        )
-
-            # Flag check
-            if "expect_flag_contains" in tc:
-                flags_str = " ".join(evaluation["flags"]).lower()
-                if tc["expect_flag_contains"] not in flags_str:
-                    test_passed = False
-                    fail_reasons.append(
-                        f"Flags: expected '{tc['expect_flag_contains']}' in {evaluation['flags']}"
-                    )
-
-            # Confidence check
-            if "expect_confidence" in tc:
-                if evaluation["confidence"] != tc["expect_confidence"]:
-                    test_passed = False
-                    fail_reasons.append(
-                        f"Confidence: expected '{tc['expect_confidence']}', "
-                        f"got '{evaluation['confidence']}'"
-                    )
-
-            # Answer content check
+            # Answer keywords
             if "expect_answer_contains" in tc:
                 answer_lower = llm_result["response"].lower()
-                for keyword in tc["expect_answer_contains"]:
-                    if keyword.lower() not in answer_lower:
+                for kw in tc["expect_answer_contains"]:
+                    if kw.lower() not in answer_lower:
                         test_passed = False
-                        fail_reasons.append(
-                            f"Answer missing keyword: '{keyword}'"
-                        )
+                        fail_reasons.append(f"Answer missing keyword: '{kw}'")
 
             if test_passed:
-                print(f"       ✅ PASS")
+                print(f"       PASS")
                 passed += 1
             else:
-                print(f"       ❌ FAIL")
+                print(f"       FAIL")
                 for reason in fail_reasons:
-                    print(f"          → {reason}")
+                    print(f"          -> {reason}")
                 failed += 1
 
             results.append({
@@ -259,45 +199,40 @@ def run_eval():
                 "model": routing["model_used"],
                 "confidence": evaluation["confidence"],
                 "flags": evaluation["flags"],
-                "sources": [c["document_name"] for c in retrieved],
-                "fail_reasons": fail_reasons if not test_passed else [],
+                "sources": [
+                    {"page": c["page_number"], "score": c["similarity_score"]}
+                    for c in retrieved
+                ],
+                "fail_reasons": fail_reasons,
             })
 
         except Exception as e:
-            print(f"       ⚠️  ERROR: {e}")
+            print(f"       ERROR: {e}")
             errors += 1
-            results.append({
-                "id": tc_id,
-                "query": query,
-                "description": desc,
-                "passed": False,
-                "error": str(e),
-            })
+            results.append({"id": tc_id, "query": query, "passed": False, "error": str(e)})
 
         print()
         sys.stdout.flush()
 
-        # Rate limit delay (Groq free tier: 30 req/min)
         if tc != TEST_CASES[-1]:
-            time.sleep(3)
+            time.sleep(2)
 
-    # Summary
     total = len(TEST_CASES)
     print("=" * 70)
-    print(f"  RESULTS: {passed}/{total} passed, {failed} failed, {errors} errors")
-    print(f"  Pass rate: {passed/total*100:.0f}%")
+    print(f"  RESULTS: {passed}/{total} passed | {failed} failed | {errors} errors")
+    print(f"  Pass rate: {passed / total * 100:.0f}%")
     print("=" * 70)
 
-    # Save results
     report_path = os.path.join(os.path.dirname(__file__), "eval_results.json")
     with open(report_path, "w") as f:
         json.dump({
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "pdf": pdf_path,
             "total": total,
             "passed": passed,
             "failed": failed,
             "errors": errors,
-            "pass_rate": f"{passed/total*100:.0f}%",
+            "pass_rate": f"{passed / total * 100:.0f}%",
             "results": results,
         }, f, indent=2)
 
@@ -306,5 +241,13 @@ def run_eval():
 
 
 if __name__ == "__main__":
-    success = run_eval()
+    pdf = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "tests", "sample.pdf"
+    )
+    if not os.path.exists(pdf):
+        print(f"PDF not found: {pdf}")
+        print("Usage: python eval_harness.py path/to/document.pdf")
+        sys.exit(1)
+
+    success = run_eval(pdf)
     sys.exit(0 if success else 1)
