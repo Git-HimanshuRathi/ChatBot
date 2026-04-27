@@ -210,7 +210,7 @@ export default function App() {
               m.id === assistantMsg.id
                 ? {
                     ...m,
-                    content: `Could not connect to backend.\n\nStart it with:\n\`uvicorn main:app --port 8000 --reload\`\n\n${fallbackErr.message}`,
+                    content: `Could not reach the server. Please try again in a moment.\n\n${fallbackErr.message}`,
                   }
                 : m,
             ),

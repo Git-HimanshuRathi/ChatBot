@@ -7,12 +7,16 @@ POST /chat/stream     — SSE streaming endpoint (used by frontend)
 GET  /session/{id}    — get info about an uploaded PDF session
 GET  /health          — health check
 """
+import logging
 import os
 import json
 import uuid
 import tempfile
 from collections import defaultdict
 from contextlib import asynccontextmanager
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -62,22 +66,23 @@ def _index_pdf(filepath: str, session_id: str, display_name: str | None = None):
 # ─── Startup ─────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("\n PDF Chat Agent — Starting up...")
+    logger.info("PDF Chat Agent — Starting up...")
     get_model()  # Pre-warm the embedding model
-    print("  Ready\n")
+    logger.info("Ready")
     yield
-    print("\n Shutting down PDF Chat Agent...")
+    logger.info("Shutting down PDF Chat Agent...")
 
 
 # ─── App ─────────────────────────────────────────────────────────────────────
 app = FastAPI(title="PDF Chat Agent", version="2.0.0", lifespan=lifespan)
 
+_allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins,
+    allow_credentials=_allowed_origins != ["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
@@ -209,7 +214,7 @@ async def load_sample(session_id: str = Form(...)):
     if not os.path.exists(SAMPLE_PDF):
         raise HTTPException(status_code=404, detail="Sample PDF not found on server.")
     info = _index_pdf(SAMPLE_PDF, session_id)
-    print(f"  Sample PDF loaded for session [{session_id}]")
+    logger.info("Sample PDF loaded for session [%s]", session_id)
     return {"session_id": session_id, **{k: info[k] for k in ("pdf_name", "page_count", "chunk_count")}}
 
 
@@ -234,8 +239,8 @@ async def upload_pdf(
 
     try:
         info = _index_pdf(tmp_path, session_id, display_name=file.filename)
-        print(f"  Session [{session_id}]: {file.filename} "
-              f"({info['page_count']} pages, {info['chunk_count']} chunks)")
+        logger.info("Session [%s]: %s (%d pages, %d chunks)",
+                    session_id, file.filename, info["page_count"], info["chunk_count"])
         return {"session_id": session_id, **{k: info[k] for k in ("pdf_name", "page_count", "chunk_count")}}
     finally:
         os.unlink(tmp_path)
@@ -260,9 +265,7 @@ async def query_endpoint(request: QueryRequest):
     session_id = request.session_id
     conv_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:8]}"
 
-    print(f"\n{'='*60}")
-    print(f"  Query: {question}")
-    print(f"  Session: {session_id} | Conversation: {conv_id}")
+    logger.info("Query: %s | Session: %s | Conv: %s", question[:80], session_id, conv_id)
 
     result = _run_pipeline(question, conv_id, session_id)
 
@@ -287,7 +290,7 @@ async def query_endpoint(request: QueryRequest):
         evaluator_flags=result["evaluation"]["flags"],
     )
 
-    print(f"{'='*60}\n")
+    logger.info("Query complete: %s", result["evaluation"]["confidence"])
 
     return QueryResponse(
         answer=result["evaluation"]["response"],
